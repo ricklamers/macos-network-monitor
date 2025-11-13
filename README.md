@@ -4,7 +4,7 @@
 
 Real-time macOS network traffic monitor with GUI showing per-process bandwidth usage.
 
-<img width="1512" height="940" alt="Screenshot 2025-11-13 at 9 58 14 PM" src="https://github.com/user-attachments/assets/41b35f49-0322-4fe1-9e26-c952a95ab38b" />
+<img width="1112" height="883" alt="Screenshot 2025-11-13 at 10 28 23 PM" src="https://github.com/user-attachments/assets/0e12e727-add9-4b51-bc21-fa437d786fa7" />
 
 ## Features
 
