@@ -15,6 +15,8 @@ import pty
 import json
 import colorsys
 import math
+import signal
+import atexit
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 try:
@@ -84,6 +86,7 @@ class NetworkMonitor:
         self.history = defaultdict(lambda: {'download': deque(maxlen=60), 'upload': deque(maxlen=60)})  # Per-process history
         self.history['timestamp'] = deque(maxlen=60)  # Shared timestamps
         self.running = True
+        self.nettop_process = None  # Store nettop subprocess for cleanup
         self.sort_column = "download"
         self.sort_reverse = True
         
@@ -567,7 +570,7 @@ class NetworkMonitor:
                 # Remove -P flag to get connection-level data for counting connections
                 # Use PTY to prevent output buffering (nettop buffers when piped)
                 master, slave = pty.openpty()
-                process = subprocess.Popen(
+                self.nettop_process = subprocess.Popen(
                     ["sudo", "nettop", "-x", "-L", "0", "-s", "1"],
                     stdout=slave,
                     stderr=slave,
@@ -582,7 +585,7 @@ class NetworkMonitor:
                 # Remove -P flag to get connection-level data for counting connections
                 # Use PTY to prevent output buffering (nettop buffers when piped)
                 master, slave = pty.openpty()
-                process = subprocess.Popen(
+                self.nettop_process = subprocess.Popen(
                     ["sudo", "nettop", "-x", "-L", "0", "-s", "1"],
                     stdout=slave,
                     stderr=slave,
@@ -676,9 +679,13 @@ class NetworkMonitor:
                 # Save current snapshot for next iteration
                 previous_data = current_snapshot
             
-            process.terminate()
+            # Clean up nettop process when loop exits
+            self.cleanup_nettop()
                     
         except Exception as e:
+            # Ensure nettop process is cleaned up even on error
+            self.cleanup_nettop()
+            
             try:
                 self.status_label.config(text=f"Error: {e}", foreground="red")
             except:
@@ -1252,10 +1259,38 @@ class NetworkMonitor:
             self.canvas.delete('tooltip')
             self.hover_tooltip = None
     
+    def cleanup_nettop(self):
+        """Clean up nettop subprocess - can be called from multiple places"""
+        if self.nettop_process:
+            try:
+                self.nettop_process.terminate()
+                # Give it a moment to terminate gracefully
+                self.nettop_process.wait(timeout=2)
+            except Exception:
+                # Force kill if terminate doesn't work
+                try:
+                    self.nettop_process.kill()
+                except Exception:
+                    pass
+            finally:
+                self.nettop_process = None
+    
     def on_closing(self):
-        """Handle window closing"""
+        """Handle window closing (from close button or ⌘+Q)"""
         self.running = False
-        self.root.destroy()
+        
+        # Clean up nettop process
+        self.cleanup_nettop()
+        
+        # Wait a bit for the monitor thread to finish
+        if hasattr(self, 'monitor_thread') and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=1)
+        
+        # Destroy window if it still exists
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
 
 def get_stored_password():
@@ -1358,6 +1393,27 @@ def main():
     
     # Create and run the app
     app = NetworkMonitor(root, sudo_password)
+    
+    # Register cleanup handlers for all exit scenarios
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    
+    # Handle Command-Q on macOS (the proper way for Tkinter)
+    # This is the macOS-specific quit event
+    try:
+        root.createcommand('::tk::mac::Quit', app.on_closing)
+    except Exception:
+        pass  # Not on macOS or command not available
+    
+    # Handle termination signals (for terminal/kill commands)
+    def signal_handler(signum, frame):
+        """Handle SIGTERM, SIGINT"""
+        app.on_closing()
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Fallback cleanup for unexpected exits
+    atexit.register(app.cleanup_nettop)
+    
     root.mainloop()
 
