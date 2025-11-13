@@ -35,7 +35,7 @@ cp -r "dist/Network Monitor.app" /Applications/
 **Why Python.framework 3.10 instead of uv Python?**
 - uv Python (cpython-3.12.8-macos-aarch64-none) has Tk/Tcl version mismatches
 - Python.framework comes with properly configured Tk/Tcl 8.6
-- PYTHONPATH points to source: `/Users/rick/workspace/sandbox/netmonitor/src`
+- PYTHONPATH points to the source directory
 
 **Why PTY?**
 - `nettop` detects pipes and buffers output (~15 seconds)
