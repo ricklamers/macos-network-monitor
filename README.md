@@ -2,6 +2,8 @@
 
 Real-time macOS network traffic monitor with GUI showing per-process bandwidth usage.
 
+<img width="1512" height="940" alt="Screenshot 2025-11-13 at 9 58 14 PM" src="https://github.com/user-attachments/assets/41b35f49-0322-4fe1-9e26-c952a95ab38b" />
+
 ## Features
 
 - **Real-time monitoring** - Updates every second via `nettop`
