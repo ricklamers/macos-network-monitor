@@ -90,7 +90,17 @@ class NetworkMonitor:
         # Hover tracking
         self.hover_tooltip = None
         self.hover_data_points = []  # Store line segments for hover detection
+        self.hover_highlights = []  # Store highlight markers (circles, vertical line)
         self.is_paused = False  # Track if graph updates are paused
+        # Log scale parameters for hover detection (updated in draw_graph)
+        self.log_min = 0.0
+        self.log_max = 1.0
+        self.log_range = 1.0
+        self.min_value = 1.0
+        self.max_value = 1.0
+        self.graph_height = 0
+        self.margin_top = 20
+        self.margin_bottom = 30
         
         # Modern color scheme
         self.colors = {
@@ -205,8 +215,9 @@ class NetworkMonitor:
         
     def setup_ui(self):
         # Top frame for controls with padding
+        # Pack this first to ensure it's on top and clickable
         self.control_frame = ttk.Frame(self.root, padding="15")
-        self.control_frame.pack(fill=tk.X)
+        self.control_frame.pack(fill=tk.X, side=tk.TOP, before=None)
         
         ttk.Label(self.control_frame, text="Network Traffic Monitor", 
                  style='Header.TLabel').pack(side=tk.LEFT, padx=10)
@@ -220,13 +231,15 @@ class NetworkMonitor:
                                       command=self.toggle_pause)
         self.pause_button.pack(side=tk.RIGHT, padx=5)
         
+        # Clear History button
         ttk.Button(self.control_frame, text="Clear History", 
                   command=self.clear_history).pack(side=tk.RIGHT, padx=5)
         
         # Create scrollable frame for main content
         # Use Canvas with scrollbars for scrollable content
+        # Ensure it doesn't overlap control_frame by packing after it
         canvas_frame = tk.Frame(self.root, bg=self.colors['bg'])
-        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP, after=self.control_frame)
         
         # Create canvas and scrollbars
         canvas = tk.Canvas(canvas_frame, bg=self.colors['bg'], highlightthickness=0)
@@ -242,6 +255,8 @@ class NetworkMonitor:
         
         # Main container inside the canvas
         main_container = tk.Frame(canvas, bg=self.colors['bg'])
+        # Start canvas window at y=0, but ensure it doesn't overlap control_frame
+        # The control_frame is packed above, so canvas content starts below it
         canvas_window = canvas.create_window(15, 0, anchor=tk.NW, window=main_container)
         
         # Update scroll region when main_container size changes
@@ -403,6 +418,10 @@ class NetworkMonitor:
         # Bind mouse events for hover
         self.canvas.bind("<Motion>", self.on_mouse_move)
         self.canvas.bind("<Leave>", self.on_mouse_leave)
+        
+        # Don't lift widgets - packing order already ensures proper z-ordering
+        # Repeated lifting can interfere with button click event handling
+        # The control_frame is already packed first, so it's on top by default
         
         # Bottom status bar
         self.status_frame = ttk.Frame(self.root)
@@ -801,6 +820,7 @@ class NetworkMonitor:
         """Draw network activity graph with per-process lines and hover support"""
         self.canvas.delete("all")
         self.hover_data_points = []  # Reset hover data points
+        self.hover_highlights = []  # Reset highlights
         
         width = self.canvas.winfo_width()
         height = self.canvas.winfo_height()
@@ -851,6 +871,16 @@ class NetworkMonitor:
         log_min = math.log10(min_value)
         log_max = math.log10(max_value)
         log_range = log_max - log_min
+        
+        # Store log scale parameters for hover detection
+        self.log_min = log_min
+        self.log_max = log_max
+        self.log_range = log_range
+        self.min_value = min_value
+        self.max_value = max_value
+        self.graph_height = graph_height
+        self.margin_top = margin_top
+        self.margin_bottom = margin_bottom
         
         # Draw grid lines and labels (logarithmic scale)
         num_grid_lines = 5
@@ -1033,73 +1063,119 @@ class NetworkMonitor:
         graph_height = height - margin_top - margin_bottom
         
         # Check if mouse is within graph bounds
+        # Also ensure we're not interfering with control_frame buttons
         if event.x < margin_left or event.x > width - margin_right or \
            event.y < margin_top or event.y > height - margin_bottom:
+            self.hide_highlights()
             self.hide_tooltip()
             return
+        
+        # Get canvas position relative to root window to ensure we're not overlapping control_frame
+        try:
+            canvas_y = self.canvas.winfo_rooty()
+            control_frame_y = self.control_frame.winfo_rooty()
+            control_frame_height = self.control_frame.winfo_height()
+            mouse_y_root = event.y_root if hasattr(event, 'y_root') else None
+            
+            # If mouse is in control_frame area, don't process (let buttons handle it)
+            if mouse_y_root and control_frame_y <= mouse_y_root <= control_frame_y + control_frame_height:
+                self.hide_highlights()
+                self.hide_tooltip()
+                return
+        except:
+            pass  # If we can't determine positions, continue normally
         
         # Need data points to show tooltips
         if not self.hover_data_points:
             return
         
-        # Find the closest data point by X coordinate (time axis)
-        # This ensures alignment with the actual chart position
+        # Find the single closest data point overall (by 2D distance, accounting for log scale)
         mouse_x = event.x
+        mouse_y = event.y
         
-        # Collect all unique X coordinates from all data points
-        all_x_coords = set()
-        for line_data in self.hover_data_points:
-            for x, y, value, direction, proc_name in line_data['points']:
-                all_x_coords.add(x)
+        # Convert mouse Y position to log value for accurate comparison on log scale
+        # Formula: y = margin_top + graph_height - (normalized * graph_height)
+        # Solving for normalized: normalized = (margin_top + graph_height - y) / graph_height
+        # Then: log_value = log_min + normalized * log_range
+        mouse_y_normalized = (self.margin_top + self.graph_height - mouse_y) / self.graph_height
+        mouse_y_normalized = max(0.0, min(1.0, mouse_y_normalized))  # Clamp to [0, 1]
+        mouse_log_value = self.log_min + mouse_y_normalized * self.log_range
         
-        if not all_x_coords:
-            self.hide_tooltip()
-            return
-        
-        # Find the data point X coordinate closest to mouse X
-        # Use a threshold based on the spacing between data points
-        closest_x = min(all_x_coords, key=lambda x: abs(mouse_x - x))
-        # Threshold: half the distance between adjacent points (approximately)
-        if len(all_x_coords) > 1:
-            sorted_x = sorted(all_x_coords)
-            min_spacing = min(sorted_x[i+1] - sorted_x[i] for i in range(len(sorted_x)-1))
-            x_threshold = min_spacing / 2
-        else:
-            x_threshold = graph_width / 60  # Fallback: ~1 second
-        
-        if abs(mouse_x - closest_x) > x_threshold:
-            self.hide_tooltip()
-            return
-        
-        # Now find the closest point at this X coordinate (prefer the one closest to mouse Y)
         closest_point = None
-        min_y_distance = float('inf')
+        min_distance_squared = float('inf')
         
+        # Find the closest point by combining X distance (pixels) and Y distance (log scale)
+        # Use squared distance to avoid sqrt calculations
         for line_data in self.hover_data_points:
             for x, y, value, direction, proc_name in line_data['points']:
-                # Match X coordinate exactly (within 0.5 pixels for floating point precision)
-                if abs(x - closest_x) < 0.5:
-                    y_distance = abs(event.y - y)
-                    if y_distance < min_y_distance:
-                        min_y_distance = y_distance
-                        closest_point = {
-                            'x': x,
-                            'y': y,
-                            'value': value,
-                            'direction': direction,
-                            'proc_name': proc_name,
-                            'color': line_data['color']
-                        }
+                # Calculate X distance (pixel distance)
+                dx = mouse_x - x
+                
+                # Calculate Y distance using log scale
+                clamped_value = max(value, self.min_value)
+                point_log_value = math.log10(clamped_value)
+                # Convert log distance to a normalized distance for comparison
+                # Scale log distance by graph_height to make it comparable to pixel distance
+                log_distance_normalized = abs(mouse_log_value - point_log_value) * (self.graph_height / self.log_range)
+                
+                # Calculate combined distance squared (weight X and Y equally)
+                distance_squared = dx * dx + log_distance_normalized * log_distance_normalized
+                
+                if distance_squared < min_distance_squared:
+                    min_distance_squared = distance_squared
+                    closest_point = {
+                        'x': x,
+                        'y': y,
+                        'value': value,
+                        'direction': direction,
+                        'proc_name': proc_name,
+                        'color': line_data['color']
+                    }
         
-        # Show tooltip if we found a point
+        # Show tooltip and highlights if we found a point
         if closest_point:
+            self.show_highlights(closest_point)
             self.show_tooltip(event.x, event.y, closest_point)
         else:
+            self.hide_highlights()
             self.hide_tooltip()
     
     def on_mouse_leave(self, event):
         """Hide tooltip when mouse leaves canvas"""
+        self.hide_highlights()
         self.hide_tooltip()
+    
+    def show_highlights(self, closest_point_data):
+        """Highlight the single closest marker to the cursor"""
+        # Remove existing highlights
+        self.hide_highlights()
+        
+        if not closest_point_data:
+            return
+        
+        # Highlight only the closest point with a larger, brighter circle
+        circle_id = self.canvas.create_oval(
+            closest_point_data['x'] - 6, closest_point_data['y'] - 6,
+            closest_point_data['x'] + 6, closest_point_data['y'] + 6,
+            fill=closest_point_data['color'],
+            outline='white',
+            width=2,
+            tags='hover_highlight'
+        )
+        self.hover_highlights.append(circle_id)
+    
+    def hide_highlights(self):
+        """Hide all highlight markers"""
+        if self.hover_highlights:
+            for highlight_id in self.hover_highlights:
+                try:
+                    self.canvas.delete(highlight_id)
+                except:
+                    pass
+            self.hover_highlights = []
+        else:
+            # Also clean up any orphaned highlights
+            self.canvas.delete('hover_highlight')
     
     def show_tooltip(self, x, y, point_data):
         """Show tooltip with process information"""
@@ -1167,18 +1243,8 @@ class NetworkMonitor:
             tags='tooltip'
         )
         
-        # Create a small indicator dot at the exact data point coordinates
-        # Lines are drawn as straight segments between points, so the dot aligns perfectly
-        dot_id = self.canvas.create_oval(
-            point_data['x'] - 4, point_data['y'] - 4,
-            point_data['x'] + 4, point_data['y'] + 4,
-            fill=point_data['color'],
-            outline='white',
-            width=2,
-            tags='tooltip'
-        )
-        
-        self.hover_tooltip = {'bg': bg_id, 'text': text_id, 'dot': dot_id}
+        # Note: The dot is now handled by show_highlights() for better visual consistency
+        self.hover_tooltip = {'bg': bg_id, 'text': text_id}
     
     def hide_tooltip(self):
         """Hide the tooltip"""
