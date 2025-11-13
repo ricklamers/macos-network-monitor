@@ -4,8 +4,14 @@
 # This creates a native macOS app bundle that uses Python.framework 3.10
 # (which has working Tk/Tcl) instead of uv Python (which has Tk issues).
 
+# Get script directory (assuming script is in project root)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Start build timer
+BUILD_START=$(date +%s)
+
 APP_NAME="Network Monitor"
-APP_DIR="/Users/rick/workspace/sandbox/netmonitor/dist/${APP_NAME}.app"
+APP_DIR="${SCRIPT_DIR}/dist/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
@@ -17,55 +23,62 @@ rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}"
 mkdir -p "${RESOURCES_DIR}"
 
-# Convert PNG icon to .icns format
-ICON_SOURCE="/Users/rick/workspace/sandbox/netmonitor/resources/network-monitor-icon.png"
+# Convert PNG icon to .icns format (with caching)
+ICON_SOURCE="${SCRIPT_DIR}/resources/network-monitor-icon.png"
+ICON_CACHE="${SCRIPT_DIR}/dist/.icon_cache.icns"
 ICON_ICNS="${RESOURCES_DIR}/AppIcon.icns"
 
 if [ -f "${ICON_SOURCE}" ]; then
-    echo "Converting icon to .icns format..."
-    # Create temporary iconset directory (must end in .iconset)
-    ICONSET_DIR=$(mktemp -d).iconset
-    mkdir -p "${ICONSET_DIR}"
-    
-    # Use sips to create all sizes in parallel for speed, only create essential sizes
-    # Create iconset with minimal required sizes for faster generation
-    # Use background jobs for parallel processing
-    sips -z 16 16     "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_16x16.png" > /dev/null 2>&1 &
-    sips -z 32 32     "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_16x16@2x.png" > /dev/null 2>&1 &
-    sips -z 32 32     "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_32x32.png" > /dev/null 2>&1 &
-    sips -z 64 64     "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_32x32@2x.png" > /dev/null 2>&1 &
-    sips -z 128 128   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_128x128.png" > /dev/null 2>&1 &
-    sips -z 256 256   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_128x128@2x.png" > /dev/null 2>&1 &
-    sips -z 256 256   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_256x256.png" > /dev/null 2>&1 &
-    sips -z 512 512   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_256x256@2x.png" > /dev/null 2>&1 &
-    sips -z 512 512   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_512x512.png" > /dev/null 2>&1 &
-    sips -z 1024 1024 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_512x512@2x.png" > /dev/null 2>&1 &
-    
-    # Wait for all background jobs to complete
-    wait
-    
-    # Convert iconset to .icns (iconutil expects directory name ending in .iconset)
-    iconutil -c icns "${ICONSET_DIR}" -o "${ICON_ICNS}" 2>/dev/null
-    
-    # Clean up temporary directory
-    TEMP_BASE="${ICONSET_DIR%.iconset}"
-    rm -rf "${TEMP_BASE}"*
-    
-    if [ -f "${ICON_ICNS}" ]; then
-        echo "✓ Icon converted successfully"
+    # Skip conversion if cached .icns exists and is newer than source
+    if [ -f "${ICON_CACHE}" ] && [ "${ICON_CACHE}" -nt "${ICON_SOURCE}" ]; then
+        cp "${ICON_CACHE}" "${ICON_ICNS}"
+        echo "✓ Using cached icon"
     else
-        echo "⚠ Warning: Icon conversion failed, app will use default icon"
+        echo "Converting icon to .icns format..."
+        ICON_START=$(date +%s)
+        # Create temporary iconset directory (must end in .iconset)
+        ICONSET_DIR=$(mktemp -d).iconset
+        mkdir -p "${ICONSET_DIR}"
+        
+        # Use minimal essential sizes only - 5 images for fastest conversion
+        # Process in parallel for maximum speed
+        sips -z 16 16   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_16x16.png" > /dev/null 2>&1 &
+        sips -z 32 32   "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_16x16@2x.png" > /dev/null 2>&1 &
+        sips -z 128 128 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_128x128.png" > /dev/null 2>&1 &
+        sips -z 256 256 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_256x256.png" > /dev/null 2>&1 &
+        sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_DIR}/icon_512x512.png" > /dev/null 2>&1 &
+        
+        # Wait for all background jobs to complete
+        wait
+        
+        # Convert iconset to .icns (iconutil expects directory name ending in .iconset)
+        # Use quiet mode and redirect stderr for faster execution
+        iconutil -c icns "${ICONSET_DIR}" -o "${ICON_ICNS}" 2>/dev/null
+        
+        # Clean up temporary directory immediately
+        TEMP_BASE="${ICONSET_DIR%.iconset}"
+        rm -rf "${TEMP_BASE}"* 2>/dev/null
+        
+        ICON_END=$(date +%s)
+        ICON_DURATION=$((ICON_END - ICON_START))
+        if [ -f "${ICON_ICNS}" ]; then
+            # Cache the icon for next build
+            cp "${ICON_ICNS}" "${ICON_CACHE}"
+            echo "✓ Icon converted successfully (${ICON_DURATION}s)"
+        else
+            echo "⚠ Warning: Icon conversion failed, app will use default icon"
+        fi
     fi
 else
     echo "⚠ Warning: Icon source not found at ${ICON_SOURCE}, app will use default icon"
 fi
 
 # Copy source code to Resources
-cp -r /Users/rick/workspace/sandbox/netmonitor/src/netmonitor "${RESOURCES_DIR}/"
+cp -r "${SCRIPT_DIR}/src/netmonitor" "${RESOURCES_DIR}/"
 
 # Create shell script launcher
 echo "Creating launcher..."
-cp /Users/rick/workspace/sandbox/netmonitor/launcher.sh "${MACOS_DIR}/Network Monitor"
+cp "${SCRIPT_DIR}/launcher.sh" "${MACOS_DIR}/Network Monitor"
 chmod +x "${MACOS_DIR}/Network Monitor"
 
 if [ $? -eq 0 ]; then
@@ -112,11 +125,33 @@ cat > "${CONTENTS_DIR}/Info.plist" << 'EOF'
 </plist>
 EOF
 
+BUILD_END=$(date +%s)
+BUILD_DURATION=$((BUILD_END - BUILD_START))
+
 echo "✓ Created ${APP_NAME}.app in dist/"
 echo ""
-echo "To install:"
-echo "  cp -r \"${APP_DIR}\" /Applications/"
+echo "Build completed in ${BUILD_DURATION}s"
 echo ""
-echo "Or open it directly:"
-echo "  open \"${APP_DIR}\""
+
+# Prompt user to install to /Applications/
+read -p "Install to /Applications/? [Y/n] " -n 1 -r
+echo ""
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+    echo "Skipping installation."
+    echo ""
+    echo "To install manually:"
+    echo "  cp -r \"${APP_DIR}\" /Applications/"
+    echo ""
+    echo "Or open it directly:"
+    echo "  open \"${APP_DIR}\""
+else
+    echo "Installing to /Applications/..."
+    cp -r "${APP_DIR}" /Applications/
+    if [ $? -eq 0 ]; then
+        echo "✓ Installed successfully!"
+    else
+        echo "✗ Installation failed"
+        exit 1
+    fi
+fi
 
