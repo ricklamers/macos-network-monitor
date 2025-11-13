@@ -1,5 +1,7 @@
 # Network Monitor
 
+<img src="resources/network-monitor-icon.png" alt="Network Monitor Icon" width="64" height="64" />
+
 Real-time macOS network traffic monitor with GUI showing per-process bandwidth usage.
 
 <img width="1512" height="940" alt="Screenshot 2025-11-13 at 9 58 14 PM" src="https://github.com/user-attachments/assets/41b35f49-0322-4fe1-9e26-c952a95ab38b" />
