@@ -57,13 +57,13 @@ class NetworkMonitor:
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         
-        # Set window size: 1000px wide, full screen height
+        # Set window size: 1000px wide, 70% of screen height
         window_width = 1000
-        window_height = screen_height
+        window_height = int(screen_height * 0.7)
         
-        # Center the window horizontally
+        # Center the window both horizontally and vertically
         x_position = (screen_width - window_width) // 2
-        y_position = 0  # Start at top
+        y_position = (screen_height - window_height) // 2
         
         # Set geometry: width x height + x + y
         self.root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
